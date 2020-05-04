@@ -26,6 +26,7 @@ type Server struct {
 	copHandler *coprocessor.CopHandler
 }
 
+// NewServer creates a new server
 func NewServer(storage storage.Storage) *Server {
 	return &Server{
 		storage: storage,
@@ -36,24 +37,87 @@ func NewServer(storage storage.Storage) *Server {
 // The below functions are Server's gRPC API (implements TinyKvServer).
 
 // Raw API.
+
+// RawGet gets a key's value
 func (server *Server) RawGet(_ context.Context, req *kvrpcpb.RawGetRequest) (*kvrpcpb.RawGetResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	resp := kvrpcpb.RawGetResponse{}
+	r, err := server.storage.Reader(req.Context)
+	if err != nil {
+		return nil, err
+	}
+	v, err := r.GetCF(req.Cf, req.Key)
+	if err != nil {
+		return nil, err
+	}
+	resp.Value = v
+	if v == nil {
+		resp.NotFound = true
+	}
+	return &resp, nil
 }
 
+// RawPut sets a new value
 func (server *Server) RawPut(_ context.Context, req *kvrpcpb.RawPutRequest) (*kvrpcpb.RawPutResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	put := storage.Put{
+		Key:   req.Key,
+		Value: req.Value,
+		Cf:    req.Cf,
+	}
+	mod := storage.Modify{Data: put}
+	if err := server.storage.Write(req.Context, []storage.Modify{mod}); err != nil {
+		return nil, err
+	}
+
+	resp := kvrpcpb.RawPutResponse{}
+	return &resp, nil
 }
 
+// RawDelete deletes a value
 func (server *Server) RawDelete(_ context.Context, req *kvrpcpb.RawDeleteRequest) (*kvrpcpb.RawDeleteResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	del := storage.Delete{
+		Cf:  req.Cf,
+		Key: req.Key,
+	}
+	mod := storage.Modify{Data: del}
+	if err := server.storage.Write(req.Context, []storage.Modify{mod}); err != nil {
+		return nil, err
+	}
+
+	resp := kvrpcpb.RawDeleteResponse{}
+	return &resp, nil
 }
 
+// RawScan scans
 func (server *Server) RawScan(_ context.Context, req *kvrpcpb.RawScanRequest) (*kvrpcpb.RawScanResponse, error) {
 	// Your Code Here (1).
-	return nil, nil
+	r, err := server.storage.Reader(req.Context)
+	if err != nil {
+		return nil, err
+	}
+	resp := kvrpcpb.RawScanResponse{}
+	limit := req.Limit
+
+	it := r.IterCF(req.Cf)
+	for it.Seek(req.StartKey); it.Valid(); it.Next() {
+		item := it.Item()
+		if limit <= 0 {
+			break
+		}
+		v, err := item.Value()
+		if err != nil {
+			return nil, err
+		}
+		resp.Kvs = append(resp.Kvs, &kvrpcpb.KvPair{
+			Key:   item.Key(),
+			Value: v,
+		})
+		limit--
+	}
+
+	return &resp, nil
 }
 
 // Raft commands (tinykv <-> tinykv)
